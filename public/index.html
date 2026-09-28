@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Đọc thông tin CCCD</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section id="guide-screen" class="screen">
+        <div class="guide-content">
+          <div class="guide-layout">
+            <div class="reader-animation">
+              <div class="reader-stage">
+                <img
+                  src="./images/maydocthecccd.png"
+                  class="reader-bottom"
+                  alt=""
+                />
+                <img
+                  src="./images/cccd_mattruoc.png"
+                  class="cccd-card"
+                  alt="CCCD"
+                />
+                <img
+                  src="./images/maydocthecccd2.png"
+                  class="reader-top"
+                  alt=""
+                />
+              </div>
+            </div>
+            <div class="guide-info">
+              <h2>Đặt CCCD lên thiết bị</h2>
+              <p class="guide-description">
+                Đặt thẻ CCCD vào đúng vị trí trên máy đọc. Hệ thống sẽ tự động
+                nhận và đọc thẻ.
+              </p>
+              <div class="steps">
+                <div class="step">
+                  <div class="step-number">1</div>
+                  <div>
+                    <strong>Đặt thẻ</strong>
+                    <p>Đặt CCCD lên vùng đọc NFC.</p>
+                  </div>
+                </div>
+                <div class="step">
+                  <div class="step-number">2</div>
+                  <div>
+                    <strong>Tự động đọc</strong>
+                    <p>Máy tự động phát hiện và đọc CCCD.</p>
+                  </div>
+                </div>
+                <div class="step">
+                  <div class="step-number">3</div>
+                  <div>
+                    <strong>Giữ thẻ cố định</strong>
+                    <p>Không di chuyển thẻ trong quá trình đọc.</p>
+                  </div>
+                </div>
+              </div>
+              <div class="guide-action">
+                <div id="device-status" class="status ready">
+                  <span class="status-dot"></span>
+                  Thiết bị sẵn sàng
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section id="card-screen" class="screen hidden">
+        <div class="success-badge">
+          <span>●</span>
+          Đọc thành công
+        </div>
+        <div class="card-content">
+          <section class="card photo-section">
+            <div class="photo-title">
+              <h2>Ảnh CCCD</h2>
+            </div>
+            <div class="portrait-container">
+              <img id="portrait" src="" alt="Ảnh chân dung" />
+            </div>
+            <div class="photo-status">Ảnh thẻ cá nhân</div>
+            <div class="document-images">
+              <div class="document-image-item">
+                <div class="document-image-title">Mặt trước / White</div>
+                <div class="document-image-container">
+                  <img id="front-white" src="" alt="Ảnh mặt trước CCCD" />
+                </div>
+              </div>
+              <div class="document-image-item">
+                <div class="document-image-title">Hồng ngoại</div>
+                <div class="document-image-container">
+                  <img id="infrared" src="" alt="Ảnh hồng ngoại" />
+                </div>
+              </div>
+              <div class="document-image-item">
+                <div class="document-image-title">UV</div>
+                <div class="document-image-container">
+                  <img id="ultraviolet" src="" alt="Ảnh UV" />
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="card information-section">
+            <h2>Thông tin cá nhân</h2>
+            <div class="information-grid">
+              <div class="info-item">
+                <span class="label">Số CCCD</span>
+                <span id="id-number" class="value">—</span>
+              </div>
+              <div class="info-item">
+                <span class="label">Họ và tên</span>
+                <span id="full-name" class="value">—</span>
+              </div>
+              <div class="info-item">
+                <span class="label">Giới tính</span>
+                <span id="gender" class="value">—</span>
+              </div>
+              <div class="info-item">
+                <span class="label">Ngày sinh</span>
+                <span id="date-of-birth" class="value">—</span>
+              </div>
+              <div class="info-item">
+                <span class="label">Quốc tịch</span>
+                <span id="nationality" class="value">—</span>
+              </div>
+              <div class="info-item">
+                <span class="label">Ngày hết hạn</span>
+                <span id="expiry-date" class="value">—</span>
+              </div>
+            </div>
+            <div class="section-divider"></div>
+            <h2>Thông tin địa chỉ</h2>
+            <div class="address-list">
+              <div class="address-item">
+                <span class="label">Quê quán</span>
+                <span id="place-of-origin" class="value">—</span>
+              </div>
+              <div class="address-item">
+                <span class="label">Nơi thường trú</span>
+                <span id="place-of-residence" class="value">—</span>
+              </div>
+            </div>
+          </section>
+        </div>
+        <footer class="card-footer">
+          <div class="reading-status">
+            <span class="status-dot success"></span>
+            <span>Đặt thẻ lên máy để đọc thẻ tiếp theo</span>
+          </div>
+        </footer>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

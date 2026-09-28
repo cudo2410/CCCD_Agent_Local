@@ -1,0 +1,17 @@
+{
+  "name": "cccd_web",
+  "version": "1.0.0",
+  "description": "CCCD-Web/\r │\r ├── server.js # Web server và kết nối với bộ đọc CCCD\r ├── parser.js # Phân tích stdout và chuyển thành dữ liệu JSON\r │\r ├── public/ # Giao diện web\r │ ├── index.html # Cấu trúc trang\r │ ├── style.css # Giao diện và bố cục\r │ └── app.js # Logic và hiển thị dữ liệu\r │\r ├── portable/ # Bộ đọc CCCD gốc, được cô lập\r │ └── IDE200_V3.0-Demo/\r │ ├── read-cccd-chip.exe # Chương trình đọc CCCD\r │ ├── read-cccd-chip.dll # Thư viện chính\r │ ├── \\*.json # Cấu hình và runtime\r │ ├── lib/ # Thư viện SDK và native\r │ ├── model/ # Model nhận dạng\r │ └── image/ # Tài nguyên hình ảnh\r │\r ├── data/ # Dữ liệu và ảnh phát sinh\r │\r └── package.json # Cấu hình Node.js",
+  "main": "parser.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
