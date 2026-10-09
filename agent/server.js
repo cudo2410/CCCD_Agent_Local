@@ -87,7 +87,8 @@ async function deleteCardImages(card) {
 
 function getCorsHeaders(req) {
   const origin = req && req.headers ? req.headers.origin : "";
-  const allowedStr = process.env.ALLOWED_ORIGINS || "https://visedu.vn";
+  const allowedStr = process.env.ALLOWED_ORIGINS ||
+    "https://visedu.vn,https://visedu.vn:4002,https://visedu.vn:4005";
   const whitelist = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -98,16 +99,29 @@ function getCorsHeaders(req) {
       .filter(Boolean),
   ];
 
-  let resultOrigin = whitelist[0];
-  if (origin && whitelist.includes(origin)) {
-    resultOrigin = origin;
-  } else if (origin) {
-    if (whitelist.includes(origin)) {
-      resultOrigin = origin;
-    } else {
-      resultOrigin =
-        whitelist.find((x) => x.includes("visedu.vn")) || whitelist[0];
+  // Cho phép mọi port của các origin trong whitelist (vd: https://visedu.vn:4002)
+  const isAllowed = (o) => {
+    if (whitelist.includes(o)) return true;
+    try {
+      const u = new URL(o);
+      return whitelist.some((w) => {
+        try {
+          const wu = new URL(w);
+          return wu.protocol === u.protocol && wu.hostname === u.hostname;
+        } catch {
+          return false;
+        }
+      });
+    } catch {
+      return false;
     }
+  };
+
+  let resultOrigin = whitelist[0];
+  if (origin) {
+    resultOrigin = isAllowed(origin)
+      ? origin
+      : whitelist.find((x) => x.includes("visedu.vn")) || whitelist[0];
   }
 
   return {
