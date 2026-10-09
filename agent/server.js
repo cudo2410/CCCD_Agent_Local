@@ -91,6 +91,7 @@ function getCorsHeaders(req) {
   const whitelist = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://visedu.vn:4002", // Thêm origin port 4002 của bạn
     ...allowedStr
       .split(",")
       .map((s) => s.trim())
@@ -111,7 +112,8 @@ function getCorsHeaders(req) {
 
   return {
     "Access-Control-Allow-Origin": resultOrigin,
-    "Access-Control-Allow-Private-Network": "true",
+    "Access-Control-Allow-Private-Network": "true", // Bắt buộc cho PNA
+    "Access-Control-Allow-Credentials": "true",
   };
 }
 
@@ -506,8 +508,10 @@ const server = http.createServer((req, res) => {
   );
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
-      "Access-Control-Allow-Methods": "GET,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Headers":
+        "Content-Type, Access-Control-Allow-Private-Network",
+      "Access-Control-Allow-Private-Network": "true", // Bắt buộc
       ...getCorsHeaders(req),
     });
     res.end();
