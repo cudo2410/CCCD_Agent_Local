@@ -1,6 +1,7 @@
 "use strict";
 
 const http = require("http");
+const https = require("https");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
@@ -13,6 +14,31 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const PORTABLE_DIR = path.join(__dirname, "portable");
 const RUN_CMD = path.join(PORTABLE_DIR, "run.cmd");
 
+let isShuttingDown = false;
+
+function getCorsHeaders(req) {
+  const origin = (req && req.headers) ? req.headers.origin : "";
+  const allowedStr = process.env.ALLOWED_ORIGINS || "https://visedu.vn";
+  const whitelist = ["http://localhost:5173", "http://127.0.0.1:5173", ...allowedStr.split(",").map(s => s.trim()).filter(Boolean)];
+  
+  let resultOrigin = whitelist[0];
+  if (origin && whitelist.includes(origin)) {
+    resultOrigin = origin;
+  } else if (origin) {
+    if (whitelist.includes(origin)) {
+       resultOrigin = origin;
+    } else {
+       resultOrigin = whitelist.find(x => x.includes("visedu.vn")) || whitelist[0];
+    }
+  }
+  
+  return {
+    "Access-Control-Allow-Origin": resultOrigin,
+    "Access-Control-Allow-Private-Network": "true"
+  };
+}
+
+
 let readerProcess = null;
 let readerStarted = false;
 let readerStopped = false;
@@ -21,28 +47,28 @@ let currentCard = null;
 let currentSignature = "";
 let sseClients = new Set();
 
-function sendJson(res, statusCode, data) {
+function sendJson(req, res, statusCode, data) {
   const body = JSON.stringify(data);
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
     "Cache-Control": "no-cache",
+    ...getCorsHeaders(req)
   });
   res.end(body);
 }
 
-function sendText(res, statusCode, text) {
+function sendText(req, res, statusCode, text) {
   res.writeHead(statusCode, {
     "Content-Type": "text/plain; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
+    ...getCorsHeaders(req)
   });
   res.end(text);
 }
 
-function sendFile(res, filePath) {
+function sendFile(req, res, filePath) {
   fs.readFile(filePath, (error, data) => {
     if (error) {
-      sendText(res, 404, "Not found");
+      sendText(req, res, 404, "Not found");
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
@@ -253,6 +279,7 @@ function startReader() {
   readerProcess.on("exit", (code, signal) => {
     readerProcess = null;
     readerStopped = true;
+    readerStarted = false;
     console.log(`Máy đọc đã dừng. Code: ${code}, Signal: ${signal || ""}`);
     broadcast("reader-stopped", {
       code,
@@ -262,12 +289,18 @@ function startReader() {
       state: "stopped",
       message: "Máy đọc đã dừng.",
     });
+    if (!isShuttingDown) {
+      console.log("Tự động khởi động lại máy đọc sau 3 giây...");
+      setTimeout(() => {
+        if (!isShuttingDown) startReader();
+      }, 3000);
+    }
   });
 }
 
-function serveImage(res, imagePath) {
+function serveImage(req, res, imagePath) {
   if (!imagePath) {
-    sendText(res, 400, "Missing image path");
+    sendText(req, res, 400, "Missing image path");
     return;
   }
   const filePath = String(imagePath).trim();
@@ -283,12 +316,12 @@ function serveImage(res, imagePath) {
   ];
   const ext = path.extname(filePath).toLowerCase();
   if (!allowedExtensions.includes(ext)) {
-    sendText(res, 403, "Unsupported image type");
+    sendText(req, res, 403, "Unsupported image type");
     return;
   }
   fs.stat(filePath, (error, stats) => {
     if (error || !stats.isFile()) {
-      sendText(res, 404, "Image not found");
+      sendText(req, res, 404, "Image not found");
       return;
     }
     const contentTypes = {
@@ -304,13 +337,13 @@ function serveImage(res, imagePath) {
     res.writeHead(200, {
       "Content-Type": contentTypes[ext],
       "Cache-Control": "no-cache",
-      "Access-Control-Allow-Origin": "*",
+      ...getCorsHeaders(req)
     });
     const stream = fs.createReadStream(filePath);
     stream.on("error", (error) => {
       console.error("Image error:", error.message);
       if (!res.headersSent) {
-        sendText(res, 500, "Cannot read image");
+        sendText(req, res, 500, "Cannot read image");
       } else {
         res.destroy();
       }
@@ -321,7 +354,7 @@ function serveImage(res, imagePath) {
 
 function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/health") {
-    sendJson(res, 200, {
+    sendJson(req, res, 200, {
       success: true,
       readerRunning: Boolean(readerProcess),
       readerStarted,
@@ -330,7 +363,7 @@ function handleApi(req, res, url) {
     return true;
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
-    sendJson(res, 200, {
+    sendJson(req, res, 200, {
       success: true,
       readerRunning: Boolean(readerProcess),
       readerStarted,
@@ -340,7 +373,7 @@ function handleApi(req, res, url) {
     return true;
   }
   if (req.method === "GET" && url.pathname === "/api/image") {
-    serveImage(res, url.searchParams.get("path"));
+    serveImage(req, res, url.searchParams.get("path"));
     return true;
   }
   return false;
@@ -351,7 +384,7 @@ function handleEvents(req, res) {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
-    "Access-Control-Allow-Origin": "*",
+    ...getCorsHeaders(req)
   });
   res.write("\n");
   sseClients.add(res);
@@ -378,10 +411,10 @@ function serveStatic(req, res, url) {
   if (pathname === "/") pathname = "/index.html";
   const filePath = path.normalize(path.join(PUBLIC_DIR, pathname));
   if (!filePath.startsWith(PUBLIC_DIR)) {
-    sendText(res, 403, "Forbidden");
+    sendText(req, res, 403, "Forbidden");
     return;
   }
-  sendFile(res, filePath);
+  sendFile(req, res, filePath);
 }
 
 const server = http.createServer((req, res) => {
@@ -391,9 +424,9 @@ const server = http.createServer((req, res) => {
   );
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET,OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
+      ...getCorsHeaders(req)
     });
     res.end();
     return;
@@ -407,7 +440,7 @@ const server = http.createServer((req, res) => {
     serveStatic(req, res, url);
     return;
   }
-  sendText(res, 404, "Not found");
+  sendText(req, res, 404, "Not found");
 });
 
 const heartbeat = setInterval(() => {
@@ -431,6 +464,7 @@ server.listen(PORT, HOST, () => {
 });
 
 function shutdown() {
+  isShuttingDown = true;
   clearInterval(heartbeat);
   for (const client of sseClients) {
     try {
