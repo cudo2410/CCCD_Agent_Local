@@ -16,28 +16,104 @@ const RUN_CMD = path.join(PORTABLE_DIR, "run.cmd");
 
 let isShuttingDown = false;
 
+async function deleteCardImages(card) {
+  // 1. Chủ động quét và dọn sạch toàn bộ ảnh sinh ra âm thầm trong thư mục image của SDK
+  const portableImageDir = path.resolve(
+    __dirname,
+    "portable",
+    "IDE200_V3.0-Demo",
+    "image",
+  );
+  try {
+    if (fs.existsSync(portableImageDir)) {
+      const files = await fs.promises.readdir(portableImageDir);
+      for (const file of files) {
+        const filePath = path.join(portableImageDir, file);
+        const stat = await fs.promises.stat(filePath);
+        if (stat.isFile()) {
+          await fs.promises.unlink(filePath);
+          console.log(`Đã xóa ảnh tồn dư trong thư mục image/: ${file}`);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Lỗi khi dọn dẹp thư mục image của SDK:", error.message);
+  }
+
+  // 2. Xóa các ảnh trên Desktop theo đúng đường dẫn SDK trả về trong log
+  if (!card || !card.images) return;
+
+  const imagePaths = [
+    card.images.frontWhite,
+    card.images.infrared,
+    card.images.ultraviolet,
+    card.images.portrait,
+  ]
+    .filter(Boolean)
+    .map((p) => path.resolve(p));
+
+  if (imagePaths.length === 0) return;
+
+  const imageDir = path.dirname(imagePaths[0]);
+  const desktopDir = path.resolve(require("os").homedir(), "Desktop");
+
+  // Chỉ xác thực và xóa nếu log chỉ đích danh thư mục phiên ngoài Desktop
+  const isDesktopSession =
+    path.dirname(imageDir).toLowerCase() === desktopDir.toLowerCase() &&
+    /^image_\d{8}_\d{6}$/i.test(path.basename(imageDir));
+
+  if (
+    !isDesktopSession ||
+    imagePaths.some(
+      (p) => path.dirname(p).toLowerCase() !== imageDir.toLowerCase(),
+    )
+  ) {
+    return; // Bỏ qua nếu cấu trúc thư mục từ log không hợp lệ
+  }
+
+  try {
+    for (const imagePath of imagePaths) {
+      if (path.dirname(imagePath).toLowerCase() !== imageDir.toLowerCase())
+        continue;
+      await fs.promises.unlink(imagePath);
+      console.log(`Đã xóa ảnh CCCD ở Desktop: ${path.basename(imagePath)}`);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.error("Lỗi xóa ảnh CCCD ở Desktop:", error.message);
+    }
+  }
+}
+
 function getCorsHeaders(req) {
-  const origin = (req && req.headers) ? req.headers.origin : "";
+  const origin = req && req.headers ? req.headers.origin : "";
   const allowedStr = process.env.ALLOWED_ORIGINS || "https://visedu.vn";
-  const whitelist = ["http://localhost:5173", "http://127.0.0.1:5173", ...allowedStr.split(",").map(s => s.trim()).filter(Boolean)];
-  
+  const whitelist = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    ...allowedStr
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  ];
+
   let resultOrigin = whitelist[0];
   if (origin && whitelist.includes(origin)) {
     resultOrigin = origin;
   } else if (origin) {
     if (whitelist.includes(origin)) {
-       resultOrigin = origin;
+      resultOrigin = origin;
     } else {
-       resultOrigin = whitelist.find(x => x.includes("visedu.vn")) || whitelist[0];
+      resultOrigin =
+        whitelist.find((x) => x.includes("visedu.vn")) || whitelist[0];
     }
   }
-  
+
   return {
     "Access-Control-Allow-Origin": resultOrigin,
-    "Access-Control-Allow-Private-Network": "true"
+    "Access-Control-Allow-Private-Network": "true",
   };
 }
-
 
 let readerProcess = null;
 let readerStarted = false;
@@ -52,7 +128,7 @@ function sendJson(req, res, statusCode, data) {
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-cache",
-    ...getCorsHeaders(req)
+    ...getCorsHeaders(req),
   });
   res.end(body);
 }
@@ -60,7 +136,7 @@ function sendJson(req, res, statusCode, data) {
 function sendText(req, res, statusCode, text) {
   res.writeHead(statusCode, {
     "Content-Type": "text/plain; charset=utf-8",
-    ...getCorsHeaders(req)
+    ...getCorsHeaders(req),
   });
   res.end(text);
 }
@@ -197,10 +273,16 @@ function handleReaderLine(rawLine) {
     });
     return;
   }
+
   if (line.includes("Sẵn sàng đọc thẻ tiếp theo")) {
+    const cardToDelete = currentCard;
+
     currentBuffer = "";
     currentCard = null;
     currentSignature = "";
+
+    void deleteCardImages(cardToDelete);
+
     broadcast("card-removed", {
       message: "Sẵn sàng đọc thẻ tiếp theo.",
     });
@@ -337,7 +419,7 @@ function serveImage(req, res, imagePath) {
     res.writeHead(200, {
       "Content-Type": contentTypes[ext],
       "Cache-Control": "no-cache",
-      ...getCorsHeaders(req)
+      ...getCorsHeaders(req),
     });
     const stream = fs.createReadStream(filePath);
     stream.on("error", (error) => {
@@ -384,7 +466,7 @@ function handleEvents(req, res) {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
-    ...getCorsHeaders(req)
+    ...getCorsHeaders(req),
   });
   res.write("\n");
   sseClients.add(res);
@@ -426,7 +508,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(204, {
       "Access-Control-Allow-Methods": "GET,OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
-      ...getCorsHeaders(req)
+      ...getCorsHeaders(req),
     });
     res.end();
     return;
