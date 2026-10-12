@@ -17,19 +17,22 @@ const RUN_CMD = path.join(PORTABLE_DIR, "run.cmd");
 let isShuttingDown = false;
 
 async function deleteCardImages(card) {
-  // 1. Chủ động quét và dọn sạch toàn bộ ảnh sinh ra âm thầm trong thư mục image của SDK
+  // 1. Xóa toàn bộ file ảnh trong thư mục image của SDK
   const portableImageDir = path.resolve(
     __dirname,
     "portable",
     "IDE200_V3.0-Demo",
     "image",
   );
+
   try {
     if (fs.existsSync(portableImageDir)) {
       const files = await fs.promises.readdir(portableImageDir);
+
       for (const file of files) {
         const filePath = path.join(portableImageDir, file);
         const stat = await fs.promises.stat(filePath);
+
         if (stat.isFile()) {
           await fs.promises.unlink(filePath);
           console.log(`Đã xóa ảnh tồn dư trong thư mục image/: ${file}`);
@@ -40,8 +43,13 @@ async function deleteCardImages(card) {
     console.error("Lỗi khi dọn dẹp thư mục image của SDK:", error.message);
   }
 
-  // 2. Xóa các ảnh trên Desktop theo đúng đường dẫn SDK trả về trong log
-  if (!card || !card.images) return;
+  // 2. Xóa toàn bộ folder phiên chứa ảnh CCCD trên Desktop
+  if (!card || !card.images) {
+    console.warn(
+      "[DELETE] Không có dữ liệu ảnh CCCD để xác định folder cần xóa.",
+    );
+    return;
+  }
 
   const imagePaths = [
     card.images.frontWhite,
@@ -52,42 +60,59 @@ async function deleteCardImages(card) {
     .filter(Boolean)
     .map((p) => path.resolve(p));
 
-  if (imagePaths.length === 0) return;
+  if (imagePaths.length === 0) {
+    console.warn("[DELETE] Không có đường dẫn ảnh CCCD.");
+    return;
+  }
 
+  const os = require("os");
+  const desktopDir = path.resolve(os.homedir(), "Desktop");
+
+  // Xác định folder phiên từ đường dẫn ảnh
   const imageDir = path.dirname(imagePaths[0]);
-  const desktopDir = path.resolve(require("os").homedir(), "Desktop");
 
-  // Chỉ xác thực và xóa nếu log chỉ đích danh thư mục phiên ngoài Desktop
+  // Chỉ cho phép xóa folder image_YYYYMMDD_HHMMSS trực tiếp trên Desktop
   const isDesktopSession =
     path.dirname(imageDir).toLowerCase() === desktopDir.toLowerCase() &&
     /^image_\d{8}_\d{6}$/i.test(path.basename(imageDir));
 
-  if (
-    !isDesktopSession ||
-    imagePaths.some(
-      (p) => path.dirname(p).toLowerCase() !== imageDir.toLowerCase(),
-    )
-  ) {
-    return; // Bỏ qua nếu cấu trúc thư mục từ log không hợp lệ
+  // Đảm bảo mọi ảnh đều nằm trong cùng folder phiên
+  const allImagesInSameDir = imagePaths.every(
+    (p) => path.dirname(p).toLowerCase() === imageDir.toLowerCase(),
+  );
+
+  if (!isDesktopSession || !allImagesInSameDir) {
+    console.warn(
+      "[DELETE] Bỏ qua: folder ảnh không hợp lệ hoặc không thuộc Desktop.",
+    );
+    console.warn("[DELETE] Desktop:", desktopDir);
+    console.warn("[DELETE] Folder ảnh:", imageDir);
+    return;
   }
 
+  console.log("[DELETE] Bắt đầu xóa toàn bộ folder ảnh CCCD:", imageDir);
+
+  // 3. Xóa toàn bộ folder phiên và mọi file bên trong
   try {
-    for (const imagePath of imagePaths) {
-      if (path.dirname(imagePath).toLowerCase() !== imageDir.toLowerCase())
-        continue;
-      await fs.promises.unlink(imagePath);
-      console.log(`Đã xóa ảnh CCCD ở Desktop: ${path.basename(imagePath)}`);
+    await fs.promises.rm(imageDir, {
+      recursive: true,
+      force: true,
+    });
+
+    if (fs.existsSync(imageDir)) {
+      console.error("[DELETE] Folder vẫn tồn tại sau khi xóa:", imageDir);
+    } else {
+      console.log("[DELETE] Đã xóa toàn bộ folder ảnh CCCD:", imageDir);
     }
   } catch (error) {
-    if (error.code !== "ENOENT") {
-      console.error("Lỗi xóa ảnh CCCD ở Desktop:", error.message);
-    }
+    console.error("[DELETE] Lỗi xóa folder ảnh CCCD:", imageDir, error.message);
   }
 }
 
 function getCorsHeaders(req) {
   const origin = req && req.headers ? req.headers.origin : "";
-  const allowedStr = process.env.ALLOWED_ORIGINS ||
+  const allowedStr =
+    process.env.ALLOWED_ORIGINS ||
     "https://visedu.vn,https://visedu.vn:4002,https://visedu.vn:4005";
   const whitelist = [
     "http://localhost:5173",
