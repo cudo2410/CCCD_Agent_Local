@@ -5,7 +5,8 @@
   "main": "parser.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "build:agent": "pkg agent/server.js --target node24-win-x64 --output agent/CCCD-Agent.exe"
   },
   "keywords": [],
   "author": "",
@@ -13,5 +14,14 @@
   "type": "commonjs",
   "dependencies": {
     "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.23.0"
+  },
+  "pkg": {
+    "assets": [
+      "public/**/*",
+      "agent/portable/**/*"
+    ]
   }
 }
