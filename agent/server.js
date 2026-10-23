@@ -4,8 +4,81 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, exec, execFile, execFileSync } = require('child_process');
 const { parseCardData } = require('./parser');
+const { setupFileLog } = require('./logger');
+
+let lastHardwarePresent = null;
+let hardwareCheckTimer = null;
+
+function checkHardwareConnected(callback) {
+  if (process.platform !== 'win32') {
+    return callback(null, true);
+  }
+  exec('pnputil /enum-devices /connected /class USB', { timeout: 3000 }, (error, stdout) => {
+    if (error) {
+      return callback(null, true);
+    }
+    const hasDevice =
+      stdout.includes('VID_0C45&PID_0415') ||
+      stdout.includes('IDE200') ||
+      stdout.includes('RTScan');
+    callback(null, hasDevice);
+  });
+}
+
+function killReaderProcess() {
+  if (!readerProcess) return;
+  const proc = readerProcess;
+  readerProcess = null;
+  readerStarted = false;
+  readerStopped = true;
+  try {
+    if (process.platform === 'win32') {
+      exec(`taskkill /pid ${proc.pid} /T /F`, () => {});
+    } else {
+      proc.kill();
+    }
+  } catch {}
+}
+
+function pollHardwareStatus() {
+  checkHardwareConnected((err, isConnected) => {
+    if (err) return;
+
+    // Phát hiện thiết bị bị rút ra khỏi USB khi Agent đang chạy
+    if (lastHardwarePresent === true && !isConnected) {
+      console.warn('[HARDWARE] Phát hiện đầu đọc CCCD đã bị rút khỏi cổng USB.');
+      isReaderReady = false;
+      readerStatus = 'no-reader';
+      readerStatusMessage = 'Không tìm thấy thiết bị đọc CCCD (đã rút USB).';
+
+      broadcast('reader-state', {
+        state: 'no-reader',
+        message: readerStatusMessage,
+      });
+      broadcast('reader-error', {
+        message: readerStatusMessage,
+      });
+
+      killReaderProcess();
+    }
+
+    // Phát hiện thiết bị được cắm lại vào cổng USB
+    if (lastHardwarePresent === false && isConnected) {
+      console.log('[HARDWARE] Phát hiện đầu đọc CCCD đã được cắm lại vào cổng USB.');
+      if (!readerProcess && !isShuttingDown) {
+        if (readerRestartTimer) {
+          clearTimeout(readerRestartTimer);
+          readerRestartTimer = null;
+        }
+        startReader();
+      }
+    }
+
+    lastHardwarePresent = isConnected;
+  });
+}
 
 const HOST = '127.0.0.1';
 const PORT = 3000;
@@ -16,6 +89,45 @@ const PUBLIC_DIR = process.pkg
   : path.join(ROOT, 'public');
 const PORTABLE_DIR = path.join(APP_DIR, 'portable');
 const RUN_CMD = path.join(PORTABLE_DIR, 'run.cmd');
+const SDK_EXE = path.join(PORTABLE_DIR, 'read-cccd-chip.exe');
+const LOG_DIR = path.join(APP_DIR, 'logs');
+
+setupFileLog({ dir: LOG_DIR });
+process.on('uncaughtException', (error) => {
+  console.error('[FATAL]', error && error.stack ? error.stack : error);
+  process.exit(1);
+});
+
+// Dòng khởi tạo OCR/Paddle mà SDK in ra mỗi lần đọc thẻ: không ghi vào log.
+const SDK_LOG_NOISE =
+  /--- Running (analysis|IR pass)|---\s+(F|f)used |^StartOCR|^start of cnninti|^setThreadNum=|^pPath=|^pConfigFile=|^buf=|^Data path :|^HCDAT :|^\*{5}|^[A-Z]:\\.*\\(ocr_data|ScanPen_PC\.cfg)$|^\d+$/;
+
+// Dừng read-cccd-chip.exe còn sót lại từ lần chạy trước (Agent bị kill/crash)
+// để tránh 2 tiến trình SDK cùng giữ đầu đọc.
+const KILL_READERS_ARGS = [
+  '-NoProfile',
+  '-NonInteractive',
+  '-Command',
+  `Get-CimInstance Win32_Process -Filter "Name='read-cccd-chip.exe'" | ` +
+    `Where-Object { $_.ExecutablePath -eq '${SDK_EXE.replace(/'/g, "''")}' } | ` +
+    `ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }`,
+];
+
+function killOrphanReaders(callback) {
+  if (process.platform !== 'win32') return callback();
+  execFile(
+    'powershell.exe',
+    KILL_READERS_ARGS,
+    { timeout: 10000, windowsHide: true },
+    (_error, stdout) => {
+      const pids = String(stdout || '').trim().split(/\s+/).filter(Boolean);
+      if (pids.length) {
+        console.warn(`[CCCD] Đã dừng tiến trình SDK còn sót lại: ${pids.join(', ')}`);
+      }
+      callback();
+    },
+  );
+}
 
 let isShuttingDown = false;
 
@@ -283,13 +395,21 @@ function processBuffer() {
 function handleReaderLine(rawLine) {
   const line = cleanOutput(rawLine).trim();
   if (!line) return;
-  console.log(line);
+  // Không ghi các dòng "- Số CCCD:", "- Họ tên:"... ra log: dưới Service,
+  // stdout được NSSM lưu vào file nên sẽ lưu lại dữ liệu cá nhân.
+  if (!line.startsWith('- ') && !SDK_LOG_NOISE.test(line)) console.log(line);
 
   // 1. Phát hiện lỗi không khởi tạo được phần cứng hoặc lỗi SDK
   if (
     line.includes('RTScanner_Start') ||
+    line.includes('RTScanner_Init') ||
+    line.includes('RTScanner_GetDeviceBaseInfo') ||
     line.includes('Không chạy được tool đọc CCCD') ||
-    line.includes('InvalidOperationException')
+    line.includes('InvalidOperationException') ||
+    line.includes('Thiết bị đang offline') ||
+    line.includes('Lỗi giao tiếp đầu đọc') ||
+    line.includes('Không mở được thiết bị') ||
+    line.includes('Cannot see if a key has been pressed')
   ) {
     isReaderReady = false;
     readerStatus = 'no-reader';
@@ -400,105 +520,132 @@ function handleReaderLine(rawLine) {
 }
 
 function startReader() {
-  if (readerStarted || readerProcess) return;
-  readerStarted = true;
-  readerStopped = false;
-  isReaderReady = false;
-  readerStatus = 'starting';
-  readerStatusMessage = 'Đang khởi động máy đọc CCCD...';
-  currentBuffer = '';
-  currentCard = null;
-  currentSignature = '';
+  if (readerStarted || readerProcess || isShuttingDown) return;
 
-  if (consecutiveInitFailures === 0) {
-    console.log('Khởi động máy đọc CCCD...');
-  }
-  broadcast('reader-started', {
-    message: 'Máy đọc CCCD đã được khởi động.',
-  });
-  broadcast('reader-state', {
-    state: 'starting',
-    message: readerStatusMessage,
-  });
+  checkHardwareConnected((err, isConnected) => {
+    lastHardwarePresent = isConnected;
 
-  readerProcess = spawn('cmd.exe', ['/c', RUN_CMD], {
-    cwd: PORTABLE_DIR,
-    windowsHide: false,
-    stdio: ['inherit', 'pipe', 'pipe'],
-  });
-  readerProcess.stdout.setEncoding('utf8');
-  readerProcess.stderr.setEncoding('utf8');
-  readerProcess.stdout.on('data', (chunk) => {
-    const text = cleanOutput(chunk);
-    const lines = text.split(/\r?\n/);
-    for (const line of lines) {
-      handleReaderLine(line);
-    }
-  });
-  readerProcess.stderr.on('data', (chunk) => {
-    const text = cleanOutput(chunk).trim();
-    if (text) {
-      console.error(text);
-    }
-  });
-  readerProcess.on('error', (error) => {
-    console.error('Reader error:', error.message);
-    isReaderReady = false;
-    readerStatus = 'error';
-    readerStatusMessage = error.message;
-    broadcast('reader-error', {
-      message: error.message,
-    });
-    broadcast('reader-state', {
-      state: 'error',
-      message: 'Máy đọc CCCD gặp lỗi khởi động.',
-    });
-  });
-  readerProcess.on('exit', (code, signal) => {
-    readerProcess = null;
-    readerStopped = true;
-    readerStarted = false;
-    const hadHardwareError = readerStatus === 'no-reader' || !isReaderReady;
-    isReaderReady = false;
-
-    if (hadHardwareError) {
-      consecutiveInitFailures++;
+    if (!isConnected) {
+      isReaderReady = false;
       readerStatus = 'no-reader';
-      readerStatusMessage = 'Đầu đọc CCCD chưa sẵn sàng hoặc không có phần cứng.';
-    } else {
-      consecutiveInitFailures = 0;
-      readerStatus = 'stopped';
-      readerStatusMessage = 'Máy đọc đã dừng.';
+      readerStatusMessage = 'Không tìm thấy thiết bị đọc CCCD (chưa cắm USB).';
+      if (consecutiveInitFailures <= 1) {
+        console.warn(`[CCCD] ${readerStatusMessage}`);
+      }
+      broadcast('reader-state', {
+        state: 'no-reader',
+        message: readerStatusMessage,
+      });
+      broadcast('reader-error', {
+        message: readerStatusMessage,
+      });
+
+      if (!isShuttingDown) {
+        if (readerRestartTimer) clearTimeout(readerRestartTimer);
+        readerRestartTimer = setTimeout(() => {
+          if (!isShuttingDown) startReader();
+        }, 5000);
+      }
+      return;
     }
 
-    if (consecutiveInitFailures <= 1) {
-      console.log(`Máy đọc đã dừng. Code: ${code}, Signal: ${signal || ''}`);
-    }
+    readerStarted = true;
+    readerStopped = false;
+    isReaderReady = false;
+    readerStatus = 'starting';
+    readerStatusMessage = 'Đang khởi động máy đọc CCCD...';
+    currentBuffer = '';
+    currentCard = null;
+    currentSignature = '';
 
-    broadcast('reader-stopped', {
-      code,
-      signal,
+    console.log('Khởi động máy đọc CCCD...');
+    broadcast('reader-started', {
+      message: 'Máy đọc CCCD đã được khởi động.',
     });
     broadcast('reader-state', {
-      state: readerStatus,
+      state: 'starting',
       message: readerStatusMessage,
     });
 
-    if (!isShuttingDown) {
-      if (readerRestartTimer) clearTimeout(readerRestartTimer);
-      // Nếu không có phần cứng: backoff từ 5s đến tối đa 15s để tránh quay vòng restart gây tốn CPU
-      const delay = hadHardwareError
-        ? Math.min(15000, 3000 + consecutiveInitFailures * 2000)
-        : 3000;
+    // SDK dùng Console.KeyAvailable nên stdin phải là console thật.
+    // Khi chạy dưới Service (NSSM) stdin của Agent không phải console,
+    // vì vậy lấy stdin từ CONIN$ (console của cmd.exe) thay vì kế thừa.
+    readerProcess = spawn('cmd.exe', ['/d', '/s', '/c', `""${RUN_CMD}" < CONIN$"`], {
+      cwd: PORTABLE_DIR,
+      windowsHide: false,
+      windowsVerbatimArguments: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    readerProcess.stdout.setEncoding('utf8');
+    readerProcess.stderr.setEncoding('utf8');
+    readerProcess.stdout.on('data', (chunk) => {
+      const text = cleanOutput(chunk);
+      const lines = text.split(/\r?\n/);
+      for (const line of lines) {
+        handleReaderLine(line);
+      }
+    });
+    readerProcess.stderr.on('data', (chunk) => {
+      const text = cleanOutput(chunk);
+      const lines = text.split(/\r?\n/);
+      for (const line of lines) {
+        handleReaderLine(line);
+      }
+    });
+    readerProcess.on('error', (error) => {
+      console.error('Reader error:', error.message);
+      isReaderReady = false;
+      readerStatus = 'error';
+      readerStatusMessage = error.message;
+      broadcast('reader-error', {
+        message: error.message,
+      });
+      broadcast('reader-state', {
+        state: 'error',
+        message: 'Máy đọc CCCD gặp lỗi khởi động.',
+      });
+    });
+    readerProcess.on('exit', (code, signal) => {
+      readerProcess = null;
+      readerStopped = true;
+      readerStarted = false;
+      const hadHardwareError = readerStatus === 'no-reader' || !isReaderReady;
+      isReaderReady = false;
 
-      if (consecutiveInitFailures <= 1) {
-        console.log(`Tự động khởi động lại máy đọc sau ${Math.round(delay / 1000)} giây...`);
+      if (hadHardwareError) {
+        consecutiveInitFailures++;
+        readerStatus = 'no-reader';
+        readerStatusMessage = 'Đầu đọc CCCD chưa sẵn sàng hoặc không có phần cứng.';
+      } else {
+        consecutiveInitFailures = 0;
+        readerStatus = 'stopped';
+        readerStatusMessage = 'Máy đọc đã dừng.';
       }
 
-      readerRestartTimer = setTimeout(() => {
-        if (!isShuttingDown) startReader();
-      }, delay);
-    }
+      console.log(`Máy đọc đã dừng. Code: ${code}, Signal: ${signal || ''}`);
+
+      broadcast('reader-stopped', {
+        code,
+        signal,
+      });
+      broadcast('reader-state', {
+        state: readerStatus,
+        message: readerStatusMessage,
+      });
+
+      if (!isShuttingDown) {
+        if (readerRestartTimer) clearTimeout(readerRestartTimer);
+        const delay = hadHardwareError
+          ? Math.min(15000, 3000 + consecutiveInitFailures * 2000)
+          : 3000;
+
+        console.log(`Tự động thử lại máy đọc sau ${Math.round(delay / 1000)} giây...`);
+
+        readerRestartTimer = setTimeout(() => {
+          if (!isShuttingDown) startReader();
+        }, delay);
+      }
+    });
   });
 }
 
@@ -672,12 +819,32 @@ server.listen(PORT, HOST, () => {
   console.log('==============================');
   console.log(`http://${HOST}:${PORT}`);
   console.log('');
-  startReader();
+  // Chỉ dọn SDK sót lại sau khi đã giữ được cổng, tức không có Agent khác đang chạy.
+  killOrphanReaders(() => {
+    if (isShuttingDown) return;
+    startReader();
+    hardwareCheckTimer = setInterval(pollHardwareStatus, 2000);
+  });
+});
+
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(
+      `[CCCD] Cổng ${PORT} đang được sử dụng. Có thể CCCD Agent hoặc Service CCCDLocalAgent đã chạy.`,
+    );
+  } else {
+    console.error('Lỗi HTTP server:', error.message);
+  }
+  process.exit(1);
 });
 
 function shutdown() {
   isShuttingDown = true;
   clearInterval(heartbeat);
+  if (hardwareCheckTimer) {
+    clearInterval(hardwareCheckTimer);
+    hardwareCheckTimer = null;
+  }
   if (readerRestartTimer) {
     clearTimeout(readerRestartTimer);
     readerRestartTimer = null;
@@ -688,9 +855,17 @@ function shutdown() {
     } catch {}
   }
   sseClients.clear();
-  if (readerProcess) {
-    readerProcess.kill();
-    readerProcess = null;
+  killReaderProcess();
+  // Dọn SDK đồng bộ: khi dừng Service, NSSM kill cả cây tiến trình của Agent
+  // nên taskkill bất đồng bộ ở trên có thể bị kill trước khi kịp chạy xong.
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('powershell.exe', KILL_READERS_ARGS, {
+        timeout: 4000,
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+    } catch {}
   }
   server.close(() => process.exit(0));
 }
