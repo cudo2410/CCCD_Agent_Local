@@ -18,9 +18,12 @@ function showCard() {
 }
 
 function setStatus(state, message) {
-  if (statusBadge) statusBadge.className = `agent-status-badge ${state}`;
-  if (statusText) statusText.textContent = message;
-  if (waitingText) waitingText.textContent = message;
+  const deviceStatus = document.getElementById("device-status");
+  if (deviceStatus) {
+    const isSuccess = state === "ready" || state === "waiting" || state === "success";
+    deviceStatus.className = `status ${isSuccess ? "ready" : "error"}`;
+    deviceStatus.innerHTML = `<span class="status-dot ${isSuccess ? "success" : ""}"></span> ${message}`;
+  }
 }
 
 function showToast(message) {
@@ -155,10 +158,14 @@ async function loadStatus() {
     if (!response.ok) return;
     const result = await response.json();
     if (result.card) displayCard(result.card);
-    if (result.readerRunning) {
-      setStatus("waiting", "Đang chờ CCCD...");
+    if (result.isReaderReady && (result.readerStatus === "waiting" || result.readerStatus === "ready")) {
+      setStatus("ready", "Thiết bị sẵn sàng");
+    } else if (result.readerStatus === "no-reader") {
+      setStatus("error", "Chưa kết nối máy đọc CCCD");
+    } else if (result.readerStatus === "starting") {
+      setStatus("waiting", "Đang khởi động máy đọc...");
     } else {
-      setStatus("stopped", "Máy đọc đã dừng");
+      setStatus("stopped", result.readerStatusMessage || "Máy đọc đã dừng");
     }
   } catch {
     setStatus("error", "Không kết nối được Agent");
@@ -167,18 +174,20 @@ async function loadStatus() {
 
 function connectEvents() {
   const source = new EventSource("/events");
-  source.addEventListener("connected", () => {
-    setStatus("waiting", "Đang chờ CCCD...");
-  });
-  source.addEventListener("reader-started", () => {
-    setStatus("waiting", "Đang chờ CCCD...");
-  });
   source.addEventListener("reader-state", (event) => {
     try {
       const data = JSON.parse(event.data);
-      if (data.state === "waiting") {
-        setStatus("waiting", data.message || "Đang chờ CCCD...");
+      if (data.state === "waiting" || data.state === "ready") {
+        setStatus("ready", data.message || "Thiết bị sẵn sàng");
         showGuide();
+        return;
+      }
+      if (data.state === "no-reader") {
+        setStatus("error", "Chưa kết nối máy đọc CCCD");
+        return;
+      }
+      if (data.state === "starting") {
+        setStatus("waiting", data.message || "Đang khởi động máy đọc...");
         return;
       }
       if (data.state === "reading") {

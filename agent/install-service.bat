@@ -19,6 +19,19 @@ set "NSSM=%APP_DIR%\nssm.exe"
 set "LOG_DIR=%APP_DIR%\logs"
 set "STATUS_URL=http://127.0.0.1:3000/api/status"
 
+:: Doi cau hinh sau khi cai: nssm set CCCDLocalAgent AppEnvironmentExtra ... roi nssm restart CCCDLocalAgent
+
+:: Thu muc anh CCCD: Desktop cua tai khoan dang cai dat ^(khong phai Desktop cua LocalSystem
+:: trong C:\Windows\System32\config\systemprofile^). SDK tao folder image_YYYYMMDD_HHMMSS
+:: truc tiep tren Desktop nay. Co the dat san CCCD_IMAGE_DIR truoc khi chay.
+if not defined CCCD_IMAGE_DIR (
+    for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"`) do set "DESKTOP_DIR=%%D"
+)
+if not defined CCCD_IMAGE_DIR (
+    if not defined DESKTOP_DIR set "DESKTOP_DIR=%USERPROFILE%\Desktop"
+)
+if not defined CCCD_IMAGE_DIR set "CCCD_IMAGE_DIR=%DESKTOP_DIR%"
+
 if not exist "%APP%" (
     echo [ERROR] Khong tim thay CCCD-Agent.exe
     pause
@@ -68,10 +81,6 @@ if %errorlevel% equ 0 (
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
-:: SDK luu anh vao Desktop cua tai khoan chay Service ^(LocalSystem^).
-:: Thu muc nay mac dinh khong ton tai, can tao de SDK va Agent dung cung duong dan.
-if not exist "%SystemRoot%\System32\config\systemprofile\Desktop" mkdir "%SystemRoot%\System32\config\systemprofile\Desktop"
-
 "%NSSM%" install "%SERVICE_NAME%" "%APP%"
 if errorlevel 1 (
     echo [ERROR] Khong the tao Service.
@@ -86,6 +95,9 @@ call :nssm_set Start SERVICE_AUTO_START || goto :config_failed
 call :nssm_set AppExit Default Restart || goto :config_failed
 call :nssm_set AppRestartDelay 3000 || goto :config_failed
 call :nssm_set AppStopMethodConsole 5000 || goto :config_failed
+:: AppEnvironmentExtra ghi de toan bo danh sach: khi doi phai liet ke lai du cac bien.
+call :nssm_set AppEnvironmentExtra "CCCD_IMAGE_DIR=%CCCD_IMAGE_DIR%" || goto :config_failed
+echo Thu muc anh tam: %CCCD_IMAGE_DIR%
 :: Khong dung AppStdout/AppRotate cua NSSM: NSSM 2.24-101 tao file log moi moi lan
 :: Service khoi dong va bi treo STOP_PENDING khi bat AppRotateOnline.
 :: CCCD-Agent.exe tu ghi logs\agent.log ^(toi da 5 MB, giu 5 file cu^).

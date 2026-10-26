@@ -249,17 +249,56 @@ Mỗi FE tích hợp thông qua API/SSE mà không cần trực tiếp gọi SDK
 - Nếu FE được triển khai qua HTTPS nhưng Agent chạy HTTP trên loopback, trình duyệt có thể áp dụng các chính sách bảo mật như Private Network Access. Cần kiểm thử trên trình duyệt và môi trường triển khai thực tế.
 - Việc hỗ trợ nhiều FE không đồng nghĩa nhiều ứng dụng có thể đồng thời điều khiển một Reader an toàn; cần xác định chính sách truy cập đồng thời nếu có nhu cầu này.
 
-## 8. Bảo mật và dữ liệu CCCD
+## 8. Cấu hình vận hành
+
+| Biến môi trường | Mặc định | Ý nghĩa |
+| --- | --- | --- |
+| `CCCD_IMAGE_DIR` | Desktop của tài khoản chạy Agent | Thư mục tuyệt đối nơi SDK tạo folder ảnh `image_YYYYMMDD_HHMMSS`. Dưới Service, `install-service.bat` đặt bằng Desktop của tài khoản cài đặt (ví dụ `C:\Users\Administrator\Desktop`). |
+| `ALLOWED_ORIGINS` | `https://visedu.vn,...` | Danh sách origin được gọi Agent (CORS). |
+
+### 8.1. Ảnh CCCD của mỗi lần đọc
+
+- Agent truyền `CCCD_IMAGE_DIR` cho SDK qua tham số `--desktop-root`, nên ảnh không phụ thuộc working directory hay tài khoản chạy Service (LocalSystem không còn lưu vào `C:\Windows\System32\config\systemprofile\Desktop`).
+- Folder `image_*` bị xóa khi nhấc thẻ, kể cả khi đọc lỗi; cũng bị xóa khi tiến trình SDK dừng giữa phiên. Khi khởi động, Agent dọn các folder `image_*` còn sót.
+- Agent chỉ xóa folder có tên `image_YYYYMMDD_HHMMSS[_N]` và chỉ chứa file do SDK tạo; các file, folder khác trên Desktop không bị động tới.
+- Nếu file bị khóa, Agent thử lại sau 30 giây.
+- `/api/image` chỉ trả ảnh nằm trong một folder `image_*` của `CCCD_IMAGE_DIR`.
+- `CCCD-Agent.exe` và thư mục `portable` phải được cập nhật cùng nhau: `portable\run.ps1` là nơi truyền `--desktop-root` cho SDK. Nếu `run.ps1` là bản cũ, log có dòng `[CCCD] ...run.ps1 là bản cũ...`.
+
+### 8.2. Log
+
+`logs\agent.log`, mỗi dòng `[thời gian] LEVEL nội dung`; khi đạt 5 MB được chuyển thành `agent.1.log` (giữ tối đa 5 file cũ). Log gồm:
+
+- khởi động Agent, tài khoản chạy, thư mục ảnh;
+- các dòng do SDK in ra: thông tin thiết bị, chờ thẻ, phát hiện thẻ, đọc thành công/lỗi, `Folder ảnh: ...`, nhấc thẻ, sẵn sàng, lỗi và exception;
+- `Đọc CCCD thành công - Họ và tên: ...` (`Không xác định` nếu SDK không trả họ tên);
+- kết quả xóa ảnh (`[DELETE] Đã xóa folder ảnh CCCD: ...`), USB rút/cắm, SDK khởi động lại, lỗi.
+
+Log không ghi số CCCD, ngày sinh, giới tính, quê quán, nơi thường trú, MRZ, đường dẫn từng ảnh, output nội bộ của thư viện OCR, request HTTP hay heartbeat SSE.
+
+### 8.3. Đổi cấu hình cho Windows Service (NSSM)
+
+Mở CMD bằng quyền Administrator tại thư mục chứa `nssm.exe`:
+
+```bat
+nssm get CCCDLocalAgent AppEnvironmentExtra
+nssm set CCCDLocalAgent AppEnvironmentExtra "CCCD_IMAGE_DIR=C:\Users\Administrator\Desktop"
+nssm restart CCCDLocalAgent
+```
+
+`AppEnvironmentExtra` ghi đè toàn bộ danh sách, nên cần liệt kê lại đủ các biến đang dùng (kể cả `ALLOWED_ORIGINS` nếu có). Sau khi restart, phần đầu `logs\agent.log` ghi `Tài khoản` và `Thư mục ảnh CCCD` đang áp dụng.
+
+## 9. Bảo mật và dữ liệu CCCD
 
 Dữ liệu CCCD là dữ liệu cá nhân cần được bảo vệ trong quá trình xử lý.
 
 - Chỉ cho phép các ứng dụng được phép truy cập Agent.
 - Hạn chế Agent lắng nghe trên giao diện mạng không cần thiết.
-- Không ghi log thông tin CCCD hoặc ảnh nhạy cảm nếu không có nhu cầu hợp lệ.
-- Thực hiện kiểm tra và dọn dẹp ảnh theo chính sách lưu trữ của ứng dụng.
+- Log chỉ chứa họ tên trên CCCD; không chứa số định danh, ảnh, MRZ, ngày sinh, quê quán hay nơi thường trú.
+- Chỉ cấp quyền đọc thư mục `logs` cho tài khoản vận hành. Không đặt `CCCD_IMAGE_DIR` trong thư mục được đồng bộ đám mây (ví dụ Desktop đã bật OneDrive).
 - Không công khai trực tiếp các endpoint của Agent ra mạng nếu chưa có biện pháp bảo vệ phù hợp.
 
-## 9. Kết luận
+## 10. Kết luận
 
 **CCCD Local Agent là lớp tích hợp độc lập giữa Web FE và máy đọc CCCD.**
 
